@@ -13,15 +13,24 @@ The project moved to GitLab in 2013 an is now maintained by Tobias "oberstet" Ob
 
 ## Installation
 
-svg4web requires [Python](https://www.python.org) 2.7 or 3.4+.
+svg4web is portable, but requires [Python](https://www.python.org) 2.7 or 3.4+.
 
 To use the svg4web:
 - download
 - unzip
 - run
 
+### Test run
 ```console
-todo
+file_url=https://api.github.com/repos/sallecta/svg4web/zipball
+file_name=$(wget --spider --server-response -q "$file_url" 2>&1 | awk -F"filename=" '{if ($2) print $2}')
+wget -O $file_name $file_url
+
+dir_name="$(unzip -qql $file_name | head -n1 | tr -s ' ' | cut -d' ' -f5-)"
+unzip $file_name
+cd $dir_name
+
+python svg4web.py --version
 ```
 
 ## Usage
