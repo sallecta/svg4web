@@ -7,7 +7,7 @@
 #  Copyright 2010 Louis Simard
 #  Copyright 2013-2014 Tavendo GmbH
 #
-#  This file is part of Scour, http://www.codedread.com/scour/
+#  This file is part of Scour, http://www.codedread.com/svg4web/
 #
 #   Licensed under the Apache License, Version 2.0 (the "License");
 #   you may not use this file except in compliance with the License.
@@ -62,15 +62,17 @@ from decimal import Context, Decimal, InvalidOperation, getcontext
 
 import six
 from six.moves import range, urllib
+import os
 
-from scour.stats import ScourStats
-from scour.svg_regex import svg_parser
-from scour.svg_transform import svg_transform_parser
-from scour.yocto_css import parseCssString
-from scour import __version__
+sys.path.append(os.path.dirname(os.path.realpath(__file__)) + '/modules')
+
+from svg4web_svg_regex import svg_parser
+from svg4web_svg_transform import svg_transform_parser
+from svg4web_yocto_css import parseCssString
+from svg4web_version import __version__
 
 
-APP = u'scour'
+APP = u'svg4web'
 VER = __version__
 COPYRIGHT = u'Copyright Jeff Schiller, Louis Simard, 2010'
 
@@ -414,7 +416,7 @@ def is_same_sign(a, b):
 def is_same_direction(x1, y1, x2, y2):
     if is_same_sign(x1, x2) and is_same_sign(y1, y2):
         diff = y1/x1 - y2/x2
-        return scouringContext.plus(1 + diff) == 1
+        return svg4webingContext.plus(1 + diff) == 1
     else:
         return False
 
@@ -667,13 +669,14 @@ def removeUnusedDefs(doc, defElem, elemsToRemove=None, referencedIDs=None):
     return elemsToRemove
 
 
-def remove_unreferenced_elements(doc, keepDefs, stats):
+def removeUnreferencedElements(doc, keepDefs):
     """
     Removes all unreferenced elements except for <svg>, <font>, <metadata>, <title>, and <desc>.
     Also vacuums the defs of any non-referenced renderable elements.
 
     Returns the number of unreferenced elements removed from the document.
     """
+    global _num_elements_removed
     num = 0
 
     # Remove certain unreferenced elements outside of defs
@@ -688,8 +691,8 @@ def remove_unreferenced_elements(doc, keepDefs, stats):
             elemsToRemove = removeUnusedDefs(doc, aDef, referencedIDs=referencedIDs)
             for elem in elemsToRemove:
                 elem.parentNode.removeChild(elem)
-            stats.num_elements_removed += len(elemsToRemove)
-            num += len(elemsToRemove)
+                _num_elements_removed += 1
+                num += 1
 
     for id in identifiedElements:
         if id not in referencedIDs:
@@ -699,7 +702,7 @@ def remove_unreferenced_elements(doc, keepDefs, stats):
                     and goner.parentNode.tagName != 'defs'):
                 goner.parentNode.removeChild(goner)
                 num += 1
-                stats.num_elements_removed += 1
+                _num_elements_removed += 1
 
     return num
 
@@ -937,18 +940,20 @@ def unprotected_ids(doc, options):
     return identifiedElements
 
 
-def remove_unreferenced_ids(referencedIDs, identifiedElements):
+def removeUnreferencedIDs(referencedIDs, identifiedElements):
     """
     Removes the unreferenced ID attributes.
 
     Returns the number of ID attributes removed
     """
+    global _num_ids_removed
     keepTags = ['font']
     num = 0
     for id in identifiedElements:
         node = identifiedElements[id]
         if id not in referencedIDs and node.nodeName not in keepTags:
             node.removeAttribute('id')
+            _num_ids_removed += 1
             num += 1
     return num
 
@@ -992,7 +997,7 @@ def removeNamespacedElements(node, namespaces):
     return num
 
 
-def remove_descriptive_elements(doc, options):
+def removeDescriptiveElements(doc, options):
     elementTypes = []
     if options.remove_descriptive_elements:
         elementTypes.extend(("title", "desc", "metadata"))
@@ -1004,38 +1009,29 @@ def remove_descriptive_elements(doc, options):
         if options.remove_metadata:
             elementTypes.append("metadata")
     if not elementTypes:
-        return 0
+        return
 
+    global _num_elements_removed
+    num = 0
     elementsToRemove = []
     for elementType in elementTypes:
         elementsToRemove.extend(doc.documentElement.getElementsByTagName(elementType))
 
     for element in elementsToRemove:
         element.parentNode.removeChild(element)
+        num += 1
+        _num_elements_removed += 1
 
-    return len(elementsToRemove)
-
-
-def g_tag_is_mergeable(node):
-    """Check if a <g> tag can be merged or not
-
-    <g> tags with a title or descriptions should generally be left alone.
-    """
-    if any(
-            True for n in node.childNodes
-            if n.nodeType == Node.ELEMENT_NODE and n.nodeName in ('title', 'desc')
-            and n.namespaceURI == NS['SVG']
-    ):
-        return False
-    return True
+    return num
 
 
-def remove_nested_groups(node, stats):
+def removeNestedGroups(node):
     """
     This walks further and further down the tree, removing groups
     which do not have any attributes or a title/desc child and
     promoting their children up one level
     """
+    global _num_elements_removed
     num = 0
 
     groupsToRemove = []
@@ -1045,21 +1041,24 @@ def remove_nested_groups(node, stats):
         for child in node.childNodes:
             if child.nodeName == 'g' and child.namespaceURI == NS['SVG'] and len(child.attributes) == 0:
                 # only collapse group if it does not have a title or desc as a direct descendant,
-                if g_tag_is_mergeable(child):
+                for grandchild in child.childNodes:
+                    if grandchild.nodeType == Node.ELEMENT_NODE and grandchild.namespaceURI == NS['SVG'] and \
+                            grandchild.nodeName in ['title', 'desc']:
+                        break
+                else:
                     groupsToRemove.append(child)
 
     for g in groupsToRemove:
         while g.childNodes.length > 0:
             g.parentNode.insertBefore(g.firstChild, g)
         g.parentNode.removeChild(g)
-
-    num += len(groupsToRemove)
-    stats.num_elements_removed += len(groupsToRemove)
+        _num_elements_removed += 1
+        num += 1
 
     # now recurse for children
     for child in node.childNodes:
         if child.nodeType == Node.ELEMENT_NODE:
-            num += remove_nested_groups(child, stats)
+            num += removeNestedGroups(child)
     return num
 
 
@@ -1173,7 +1172,11 @@ def mergeSiblingGroupsWithCommonAttributes(elem):
                 if nextNode.nodeName != 'g' or nextNode.namespaceURI != NS['SVG']:
                     break
                 nextAttributes = {a.nodeName: a.nodeValue for a in nextNode.attributes.values()}
-                if attributes != nextAttributes or not g_tag_is_mergeable(nextNode):
+                hasNoMergeTags = (True for n in nextNode.childNodes
+                                  if n.nodeType == Node.ELEMENT_NODE
+                                  and n.nodeName in ('title', 'desc')
+                                  and n.namespaceURI == NS['SVG'])
+                if attributes != nextAttributes or any(hasNoMergeTags):
                     break
                 else:
                     runElements += 1
@@ -1214,7 +1217,7 @@ def mergeSiblingGroupsWithCommonAttributes(elem):
     return num
 
 
-def create_groups_for_common_attributes(elem, stats):
+def createGroupsForCommonAttributes(elem):
     """
     Creates <g> elements to contain runs of 3 or more
     consecutive child elements having at least one common attribute.
@@ -1226,6 +1229,8 @@ def create_groups_for_common_attributes(elem, stats):
 
     This function acts recursively on the given element.
     """
+    num = 0
+    global _num_elements_removed
 
     # TODO perhaps all of the Presentation attributes in http://www.w3.org/TR/SVG/struct.html#GElement
     # could be added here
@@ -1325,8 +1330,9 @@ def create_groups_for_common_attributes(elem, stats):
                     # Include the group in elem's children.
                     elem.childNodes.insert(runStart, group)
                     group.parentNode = elem
+                    num += 1
                     curChild = runStart - 1
-                    stats.num_elements_removed -= 1
+                    _num_elements_removed -= 1
                 else:
                     curChild -= 1
             else:
@@ -1335,7 +1341,9 @@ def create_groups_for_common_attributes(elem, stats):
     # each child gets the same treatment, recursively
     for childNode in elem.childNodes:
         if childNode.nodeType == Node.ELEMENT_NODE:
-            create_groups_for_common_attributes(childNode, stats)
+            num += createGroupsForCommonAttributes(childNode)
+
+    return num
 
 
 def removeUnusedAttributesOnParent(elem):
@@ -1375,11 +1383,12 @@ def removeUnusedAttributesOnParent(elem):
             unusedAttrs[attr.nodeName] = attr.nodeValue
 
     # for each child, if at least one child inherits the parent's attribute, then remove
-    for child in childElements:
+    for childNum in range(len(childElements)):
+        child = childElements[childNum]
         inheritedAttrs = []
         for name in unusedAttrs:
             val = child.getAttribute(name)
-            if val == '' or val == 'inherit':
+            if val == '' or val is None or val == 'inherit':
                 inheritedAttrs.append(name)
         for a in inheritedAttrs:
             del unusedAttrs[a]
@@ -1392,7 +1401,8 @@ def removeUnusedAttributesOnParent(elem):
     return num
 
 
-def remove_duplicate_gradient_stops(doc, stats):
+def removeDuplicateGradientStops(doc):
+    global _num_elements_removed
     num = 0
 
     for gradType in ['linearGradient', 'radialGradient']:
@@ -1425,18 +1435,20 @@ def remove_duplicate_gradient_stops(doc, stats):
 
             for stop in stopsToRemove:
                 stop.parentNode.removeChild(stop)
-            num += len(stopsToRemove)
-            stats.num_elements_removed += len(stopsToRemove)
+                num += 1
+                _num_elements_removed += 1
 
+    # linear gradients
     return num
 
 
-def collapse_singly_referenced_gradients(doc, stats):
+def collapseSinglyReferencedGradients(doc):
+    global _num_elements_removed
     num = 0
 
     identifiedElements = findElementsWithId(doc.documentElement)
 
-    # make sure to reset the ref'ed ids for when we are running this in testscour
+    # make sure to reset the ref'ed ids for when we are running this in testsvg4web
     for rid, nodes in six.iteritems(findReferencedElements(doc.documentElement)):
         # Make sure that there's actually a defining element for the current ID name.
         # (Cyn: I've seen documents with #id references but no element with that ID!)
@@ -1484,7 +1496,7 @@ def collapse_singly_referenced_gradients(doc, stats):
                     if target_href:
                         # If the elem node had an xlink:href, then the
                         # refElem have to point to it as well to
-                        # preserve the semantics of the image.
+                        # perserve the semantics of the image.
                         refElem.setAttributeNS(NS['XLINK'], 'href', target_href)
                     else:
                         # The elem node had no xlink:href reference,
@@ -1493,9 +1505,8 @@ def collapse_singly_referenced_gradients(doc, stats):
 
                     # now delete elem
                     elem.parentNode.removeChild(elem)
-                    stats.num_elements_removed += 1
+                    _num_elements_removed += 1
                     num += 1
-
     return num
 
 
@@ -1610,7 +1621,7 @@ def dedup_gradient(master_id, duplicates_ids, duplicates, referenced_ids):
 
     # If the gradients have an ID, we update referenced_ids to match the newly remapped IDs.
     # This enable us to avoid calling findReferencedElements once per loop, which is helpful as it is
-    # one of the slowest functions in scour.
+    # one of the slowest functions in svg4web.
     if master_id:
         try:
             master_references = referenced_ids[master_id]
@@ -1883,7 +1894,7 @@ def styleInheritedByChild(node, style, nodeIsChild=False):
                          'missing-glyph', 'pattern', 'svg', 'switch', 'symbol']:
         return False
 
-    # in all other cases we have to assume the inherited value of 'style' is meaningful and has to be kept
+    # in all other cases we have to assume the inherited value of 'style' is meaningfull and has to be kept
     # (e.g nodes without children at the end of the DOM tree, text nodes, ...)
     return True
 
@@ -2043,7 +2054,7 @@ default_attributes = [
     # filter effects
     #   TODO: Some numerical attributes allow an optional second value ("number-optional-number")
     #         and are currently handled as strings to avoid an exception in 'SVGLength', see
-    #         https://github.com/scour-project/scour/pull/192
+    #         https://github.com/svg4web-project/svg4web/pull/192
     DefaultAttribute('amplitude', 1, elements=['feFuncA', 'feFuncB', 'feFuncG', 'feFuncR']),
     DefaultAttribute('azimuth', 0, elements=['feDistantLight']),
     DefaultAttribute('baseFrequency', '0', elements=['feFuncA', 'feFuncB', 'feFuncG', 'feFuncR']),
@@ -2109,7 +2120,7 @@ def removeDefaultAttributeValue(node, attribute):
     """
     Removes the DefaultAttribute 'attribute' from 'node' if specified conditions are fulfilled
 
-    Warning: Does NOT check if the attribute is actually valid for the passed element type for increased performance!
+    Warning: Does NOT check if the attribute is actually valid for the passed element type for increased preformance!
     """
     if not node.hasAttribute(attribute.name):
         return 0
@@ -2134,16 +2145,13 @@ def removeDefaultAttributeValue(node, attribute):
     return 0
 
 
-def removeDefaultAttributeValues(node, options, tainted=None):
+def removeDefaultAttributeValues(node, options, tainted=set()):
     u"""'tainted' keeps a set of attributes defined in parent nodes.
 
     For such attributes, we don't delete attributes with default values."""
     num = 0
     if node.nodeType != Node.ELEMENT_NODE:
         return 0
-
-    if tainted is None:
-        tainted = set()
 
     # Conditionally remove all default attributes defined in 'default_attributes' (a list of 'DefaultAttribute's)
     #
@@ -2272,10 +2280,12 @@ def convertColors(element):
 #       reusing data structures, etc
 
 
-def clean_path(element, options, stats):
+def cleanPath(element, options):
     """
        Cleans the path string (d attribute) of the element
     """
+    global _num_bytes_saved_in_path_data
+    global _num_path_segments_removed
 
     # this gets the parser object from svg_regex.py
     oldPathStr = element.getAttribute('d')
@@ -2426,34 +2436,34 @@ def clean_path(element, options, stats):
                 while i < len(data):
                     if data[i] == data[i + 1] == 0:
                         del data[i:i + 2]
-                        stats.num_path_segments_removed += 1
+                        _num_path_segments_removed += 1
                     else:
                         i += 2
             elif cmd == 'c':
                 while i < len(data):
                     if data[i] == data[i + 1] == data[i + 2] == data[i + 3] == data[i + 4] == data[i + 5] == 0:
                         del data[i:i + 6]
-                        stats.num_path_segments_removed += 1
+                        _num_path_segments_removed += 1
                     else:
                         i += 6
             elif cmd == 'a':
                 while i < len(data):
                     if data[i + 5] == data[i + 6] == 0:
                         del data[i:i + 7]
-                        stats.num_path_segments_removed += 1
+                        _num_path_segments_removed += 1
                     else:
                         i += 7
             elif cmd == 'q':
                 while i < len(data):
                     if data[i] == data[i + 1] == data[i + 2] == data[i + 3] == 0:
                         del data[i:i + 4]
-                        stats.num_path_segments_removed += 1
+                        _num_path_segments_removed += 1
                     else:
                         i += 4
             elif cmd in ['h', 'v']:
                 oldLen = len(data)
                 path[pathIndex] = (cmd, [coord for coord in data if coord != 0])
-                stats.num_path_segments_removed += len(path[pathIndex][1]) - oldLen
+                _num_path_segments_removed += len(path[pathIndex][1]) - oldLen
 
         # remove no-op commands
         pathIndex = len(path)
@@ -2474,7 +2484,7 @@ def clean_path(element, options, stats):
                     # continue a draw on the same subpath after a
                     # "z").
                     del path[pathIndex]
-                    stats.num_path_segments_removed += 1
+                    _num_path_segments_removed += 1
                 else:
                     # it is not safe to rewrite "m0 0 ..." to "l..."
                     # because of this "z" command.
@@ -2484,7 +2494,7 @@ def clean_path(element, options, stats):
                     # Ends with an empty move (but no line/draw
                     # following it)
                     del path[pathIndex]
-                    stats.num_path_segments_removed += 1
+                    _num_path_segments_removed += 1
                     continue
                 if subpath_needs_anchor:
                     subpath_needs_anchor = False
@@ -2492,7 +2502,7 @@ def clean_path(element, options, stats):
                     # unanchored, i.e. we can replace "m0 0 ..." with
                     # "l..." as there is no "z" after it.
                     path[pathIndex] = ('l', data[2:])
-                    stats.num_path_segments_removed += 1
+                    _num_path_segments_removed += 1
 
     # fixup: Delete subcommands having no coordinates.
     path = [elem for elem in path if len(elem[1]) > 0 or elem[0] == 'z']
@@ -2580,14 +2590,14 @@ def clean_path(element, options, stats):
                         lineTuples = []
                     # append the v and then the remaining line coords
                     newPath.append(('v', [data[i + 1]]))
-                    stats.num_path_segments_removed += 1
+                    _num_path_segments_removed += 1
                 elif data[i + 1] == 0:
                     if lineTuples:
                         # flush the line command, then append the h and then the remaining line coords
                         newPath.append(('l', lineTuples))
                         lineTuples = []
                     newPath.append(('h', [data[i]]))
-                    stats.num_path_segments_removed += 1
+                    _num_path_segments_removed += 1
                 else:
                     lineTuples.extend(data[i:i + 2])
                 i += 2
@@ -2607,7 +2617,7 @@ def clean_path(element, options, stats):
                         cmd = 'l'  # dealing with linetos now
                     # append the v and then the remaining line coords
                     newPath.append(('v', [data[i + 1]]))
-                    stats.num_path_segments_removed += 1
+                    _num_path_segments_removed += 1
                 elif data[i + 1] == 0:
                     if lineTuples:
                         # flush the m/l command, then append the h and then the remaining line coords
@@ -2615,7 +2625,7 @@ def clean_path(element, options, stats):
                         lineTuples = []
                         cmd = 'l'  # dealing with linetos now
                     newPath.append(('h', [data[i]]))
-                    stats.num_path_segments_removed += 1
+                    _num_path_segments_removed += 1
                 else:
                     lineTuples.extend(data[i:i + 2])
                 i += 2
@@ -2644,7 +2654,7 @@ def clean_path(element, options, stats):
                         curveTuples = []
                     # append the s command
                     newPath.append(('s', [data[i + 2], data[i + 3], data[i + 4], data[i + 5]]))
-                    stats.num_path_segments_removed += 1
+                    _num_path_segments_removed += 1
                 else:
                     j = 0
                     while j <= 5:
@@ -2669,7 +2679,7 @@ def clean_path(element, options, stats):
                         curveTuples = []
                     # append the t command
                     newPath.append(('t', [data[i + 2], data[i + 3]]))
-                    stats.num_path_segments_removed += 1
+                    _num_path_segments_removed += 1
                 else:
                     j = 0
                     while j <= 3:
@@ -2702,7 +2712,7 @@ def clean_path(element, options, stats):
                     if is_same_sign(data[coordIndex], data[coordIndex+1]):
                         data[coordIndex] += data[coordIndex+1]
                         del data[coordIndex+1]
-                        stats.num_path_segments_removed += 1
+                        _num_path_segments_removed += 1
                     else:
                         coordIndex += 1
 
@@ -2715,7 +2725,7 @@ def clean_path(element, options, stats):
                         data[coordIndex+1] += data[coordIndex+3]
                         del data[coordIndex+2]  # delete the next two elements
                         del data[coordIndex+2]
-                        stats.num_path_segments_removed += 1
+                        _num_path_segments_removed += 1
                     else:
                         coordIndex += 2
 
@@ -2728,7 +2738,7 @@ def clean_path(element, options, stats):
                         data[coordIndex+1] += data[coordIndex+3]
                         del data[coordIndex+2]  # delete the next two elements
                         del data[coordIndex+2]
-                        stats.num_path_segments_removed += 1
+                        _num_path_segments_removed += 1
                     else:
                         coordIndex += 2
 
@@ -2763,7 +2773,7 @@ def clean_path(element, options, stats):
     # if for whatever reason we actually made the path longer don't use it
     # TODO: maybe we could compare path lengths after each optimization step and use the shortest
     if len(newPathStr) <= len(oldPathStr):
-        stats.num_bytes_saved_in_path_data += (len(oldPathStr) - len(newPathStr))
+        _num_bytes_saved_in_path_data += (len(oldPathStr) - len(newPathStr))
         element.setAttribute('d', newPathStr)
 
 
@@ -2827,11 +2837,11 @@ def parseListOfPoints(s):
     return nums
 
 
-def clean_polygon(elem, options):
+def cleanPolygon(elem, options):
     """
        Remove unnecessary closing point of polygon points attribute
     """
-    num_points_removed_from_polygon = 0
+    global _num_points_removed_from_polygon
 
     pts = parseListOfPoints(elem.getAttribute('points'))
     N = len(pts) / 2
@@ -2840,9 +2850,8 @@ def clean_polygon(elem, options):
         (endx, endy) = pts[-2:]
         if startx == endx and starty == endy:
             del pts[-2:]
-            num_points_removed_from_polygon += 1
-    elem.setAttribute('points', scourCoordinates(pts, options, True))
-    return num_points_removed_from_polygon
+            _num_points_removed_from_polygon += 1
+    elem.setAttribute('points', svg4webCoordinates(pts, options, True))
 
 
 def cleanPolyline(elem, options):
@@ -2850,7 +2859,7 @@ def cleanPolyline(elem, options):
        Scour the polyline points attribute
     """
     pts = parseListOfPoints(elem.getAttribute('points'))
-    elem.setAttribute('points', scourCoordinates(pts, options, True))
+    elem.setAttribute('points', svg4webCoordinates(pts, options, True))
 
 
 def controlPoints(cmd, data):
@@ -2888,8 +2897,8 @@ def serializePath(pathObj, options):
        Reserializes the path data with some cleanups.
     """
     # elliptical arc commands must have comma/wsp separating the coordinates
-    # this fixes an issue outlined in Fix https://bugs.launchpad.net/scour/+bug/412754
-    return ''.join(cmd + scourCoordinates(data, options,
+    # this fixes an issue outlined in Fix https://bugs.launchpad.net/svg4web/+bug/412754
+    return ''.join(cmd + svg4webCoordinates(data, options,
                                           control_points=controlPoints(cmd, data),
                                           flags=flags(cmd, data))
                    for cmd, data in pathObj)
@@ -2899,11 +2908,11 @@ def serializeTransform(transformObj):
     """
        Reserializes the transform data with some cleanups.
     """
-    return ' '.join(command + '(' + ' '.join(scourUnitlessLength(number) for number in numbers) + ')'
+    return ' '.join(command + '(' + ' '.join(svg4webUnitlessLength(number) for number in numbers) + ')'
                     for command, numbers in transformObj)
 
 
-def scourCoordinates(data, options, force_whitespace=False, control_points=[], flags=[]):
+def svg4webCoordinates(data, options, force_whitespace=False, control_points=[], flags=[]):
     """
        Serializes coordinate data with some cleanups:
           - removes all trailing zeros after the decimal
@@ -2917,7 +2926,7 @@ def scourCoordinates(data, options, force_whitespace=False, control_points=[], f
         previousCoord = ''
         for coord in data:
             is_control_point = c in control_points
-            scouredCoord = scourUnitlessLength(coord,
+            svg4webedCoord = svg4webUnitlessLength(coord,
                                                renderer_workaround=options.renderer_workaround,
                                                is_control_point=is_control_point)
             # don't output a space if this number starts with a dot (.) or minus sign (-); we only need a space if
@@ -2925,17 +2934,17 @@ def scourCoordinates(data, options, force_whitespace=False, control_points=[], f
             #   - this number starts with a dot but the previous number had *no* dot or exponent
             #     i.e. '1.3 0.5' -> '1.3.5' or '1e3 0.5' -> '1e3.5' is fine but '123 0.5' -> '123.5' is obviously not
             #   - 'force_whitespace' is explicitly set to 'True'
-            # we never need a space after flags (occurring in elliptical arcs), but librsvg struggles without it
+            # we never need a space after flags (occuring in elliptical arcs), but librsvg struggles without it
             if (c > 0
                     and (force_whitespace
-                         or scouredCoord[0].isdigit()
-                         or (scouredCoord[0] == '.' and not ('.' in previousCoord or 'e' in previousCoord)))
+                         or svg4webedCoord[0].isdigit()
+                         or (svg4webedCoord[0] == '.' and not ('.' in previousCoord or 'e' in previousCoord)))
                     and ((c-1 not in flags) or options.renderer_workaround)):
                 newData.append(' ')
 
-            # add the scoured coordinate to the path string
-            newData.append(scouredCoord)
-            previousCoord = scouredCoord
+            # add the svg4webed coordinate to the path string
+            newData.append(svg4webedCoord)
+            previousCoord = svg4webedCoord
             c += 1
 
         # What we need to do to work around GNOME bugs 548494, 563933 and 620565, is to make sure that a dot doesn't
@@ -2955,20 +2964,20 @@ def scourCoordinates(data, options, force_whitespace=False, control_points=[], f
     return ''
 
 
-def scourLength(length):
+def svg4webLength(length):
     """
     Scours a length. Accepts units.
     """
     length = SVGLength(length)
 
-    return scourUnitlessLength(length.value) + Unit.str(length.units)
+    return svg4webUnitlessLength(length.value) + Unit.str(length.units)
 
 
-def scourUnitlessLength(length, renderer_workaround=False, is_control_point=False):  # length is of a numeric type
+def svg4webUnitlessLength(length, renderer_workaround=False, is_control_point=False):  # length is of a numeric type
     """
     Scours the numeric part of a length only. Does not accept units.
 
-    This is faster than scourLength on elements guaranteed not to
+    This is faster than svg4webLength on elements guaranteed not to
     contain units.
     """
     if not isinstance(length, Decimal):
@@ -2978,9 +2987,9 @@ def scourUnitlessLength(length, renderer_workaround=False, is_control_point=Fals
     # reduce numeric precision
     # plus() corresponds to the unary prefix plus operator and applies context precision and rounding
     if is_control_point:
-        length = scouringContextC.plus(length)
+        length = svg4webingContextC.plus(length)
     else:
-        length = scouringContext.plus(length)
+        length = svg4webingContext.plus(length)
 
     # remove trailing zeroes as we do not care for significance
     intLength = length.to_integral_value()
@@ -3041,7 +3050,7 @@ def reducePrecision(element):
         if val != '':
             valLen = SVGLength(val)
             if valLen.units != Unit.INVALID:  # not an absolute/relative size or inherit, can be % though
-                newVal = scourLength(val)
+                newVal = svg4webLength(val)
                 if len(newVal) < len(val):
                     num += len(val) - len(newVal)
                     element.setAttribute(lengthAttr, newVal)
@@ -3050,7 +3059,7 @@ def reducePrecision(element):
             val = styles[lengthAttr]
             valLen = SVGLength(val)
             if valLen.units != Unit.INVALID:
-                newVal = scourLength(val)
+                newVal = svg4webLength(val)
                 if len(newVal) < len(val):
                     num += len(val) - len(newVal)
                     styles[lengthAttr] = newVal
@@ -3282,27 +3291,31 @@ def optimizeTransforms(element, options):
     return num
 
 
-def remove_comments(element, stats):
+def removeComments(element):
     """
        Removes comments from the element and its children.
     """
+    global _num_bytes_saved_in_comments
+    num = 0
 
     if isinstance(element, xml.dom.minidom.Comment):
-        stats.num_bytes_saved_in_comments += len(element.data)
-        stats.num_comments_removed += 1
+        _num_bytes_saved_in_comments += len(element.data)
         element.parentNode.removeChild(element)
+        num += 1
     else:
         for subelement in element.childNodes[:]:
-            remove_comments(subelement, stats)
+            num += removeComments(subelement)
+
+    return num
 
 
-def embed_rasters(element, options):
+def embedRasters(element, options):
     import base64
     """
       Converts raster references to inline images.
       NOTE: there are size limits to base64-encoding handling in browsers
     """
-    num_rasters_embedded = 0
+    global _num_rasters_embedded
 
     href = element.getAttributeNS(NS['XLINK'], 'href')
 
@@ -3370,9 +3383,8 @@ def embed_rasters(element, options):
 
                     element.setAttributeNS(NS['XLINK'], 'href',
                                            'data:image/' + ext + ';base64,' + b64eRaster.decode())
-                    num_rasters_embedded += 1
+                    _num_rasters_embedded += 1
                     del b64eRaster
-    return num_rasters_embedded
 
 
 def properlySizeDoc(docElement, options):
@@ -3392,6 +3404,7 @@ def properlySizeDoc(docElement, options):
     # parse viewBox attribute
     vbSep = RE_COMMA_WSP.split(docElement.getAttribute('viewBox'))
     # if we have a valid viewBox we need to check it
+    vbWidth, vbHeight = 0, 0
     if len(vbSep) == 4:
         try:
             # if x or y are specified and non-zero then it is not ok to overwrite it
@@ -3426,6 +3439,7 @@ def remapNamespacePrefix(node, oldprefix, newprefix):
         parent = node.parentNode
 
         # create a replacement node
+        newNode = None
         if newprefix != '':
             newNode = doc.createElementNS(namespace, newprefix + ":" + localName)
         else:
@@ -3620,25 +3634,52 @@ def serializeXML(element, options, indent_depth=0, preserveWhitespace=False):
 # this is the main method
 # input is a string representation of the input XML
 # returns a string representation of the output XML
-def scourString(in_string, options=None, stats=None):
+def svg4webString(in_string, options=None):
     # sanitize options (take missing attributes from defaults, discard unknown attributes)
     options = sanitizeOptions(options)
-
-    if stats is None:
-        # This is easier than doing "if stats is not None:" checks all over the place
-        stats = ScourStats()
 
     # default or invalid value
     if(options.cdigits < 0):
         options.cdigits = options.digits
 
-    # create decimal contexts with reduced precision for scouring numbers
+    # create decimal contexts with reduced precision for svg4webing numbers
     # calculations should be done in the default context (precision defaults to 28 significant digits)
     # to minimize errors
-    global scouringContext
-    global scouringContextC  # even more reduced precision for control points
-    scouringContext = Context(prec=options.digits)
-    scouringContextC = Context(prec=options.cdigits)
+    global svg4webingContext
+    global svg4webingContextC  # even more reduced precision for control points
+    svg4webingContext = Context(prec=options.digits)
+    svg4webingContextC = Context(prec=options.cdigits)
+
+    # globals for tracking statistics
+    # TODO: get rid of these globals...
+    global _num_elements_removed
+    global _num_attributes_removed
+    global _num_ids_removed
+    global _num_comments_removed
+    global _num_style_properties_fixed
+    global _num_rasters_embedded
+    global _num_path_segments_removed
+    global _num_points_removed_from_polygon
+    global _num_bytes_saved_in_path_data
+    global _num_bytes_saved_in_colors
+    global _num_bytes_saved_in_comments
+    global _num_bytes_saved_in_ids
+    global _num_bytes_saved_in_lengths
+    global _num_bytes_saved_in_transforms
+    _num_elements_removed = 0
+    _num_attributes_removed = 0
+    _num_ids_removed = 0
+    _num_comments_removed = 0
+    _num_style_properties_fixed = 0
+    _num_rasters_embedded = 0
+    _num_path_segments_removed = 0
+    _num_points_removed_from_polygon = 0
+    _num_bytes_saved_in_path_data = 0
+    _num_bytes_saved_in_colors = 0
+    _num_bytes_saved_in_comments = 0
+    _num_bytes_saved_in_ids = 0
+    _num_bytes_saved_in_lengths = 0
+    _num_bytes_saved_in_transforms = 0
 
     doc = xml.dom.minidom.parseString(in_string)
 
@@ -3654,14 +3695,14 @@ def scourString(in_string, options=None, stats=None):
             print("WARNING: {}".format(errmsg), file=sys.stderr)
 
     # remove descriptive elements
-    stats.num_elements_removed += remove_descriptive_elements(doc, options)
+    removeDescriptiveElements(doc, options)
 
     # remove unneeded namespaced elements/attributes added by common editors
     if options.keep_editor_data is False:
-        stats.num_elements_removed += removeNamespacedElements(doc.documentElement,
-                                                               unwanted_ns)
-        stats.num_attributes_removed += removeNamespacedAttributes(doc.documentElement,
-                                                                   unwanted_ns)
+        _num_elements_removed += removeNamespacedElements(doc.documentElement,
+                                                          unwanted_ns)
+        _num_attributes_removed += removeNamespacedAttributes(doc.documentElement,
+                                                              unwanted_ns)
 
         # remove the xmlns: declarations now
         xmlnsDeclsToRemove = []
@@ -3672,7 +3713,7 @@ def scourString(in_string, options=None, stats=None):
 
         for attr in xmlnsDeclsToRemove:
             doc.documentElement.removeAttribute(attr)
-        stats.num_attributes_removed += len(xmlnsDeclsToRemove)
+            _num_attributes_removed += 1
 
     # ensure namespace for SVG is declared
     # TODO: what if the default namespace is something else (i.e. some valid namespace)?
@@ -3707,28 +3748,28 @@ def scourString(in_string, options=None, stats=None):
 
     for attrName in xmlnsDeclsToRemove:
         doc.documentElement.removeAttribute(attrName)
-    stats.num_attributes_removed += len(xmlnsDeclsToRemove)
+        _num_attributes_removed += 1
 
     for prefix in redundantPrefixes:
         remapNamespacePrefix(doc.documentElement, prefix, '')
 
     if options.strip_comments:
-        remove_comments(doc, stats)
+        _num_comments_removed = removeComments(doc)
 
     if options.strip_xml_space_attribute and doc.documentElement.hasAttribute('xml:space'):
         doc.documentElement.removeAttribute('xml:space')
-        stats.num_attributes_removed += 1
+        _num_attributes_removed += 1
 
     # repair style (remove unnecessary style properties and change them into XML attributes)
-    stats.num_style_properties_fixed = repairStyle(doc.documentElement, options)
+    _num_style_properties_fixed = repairStyle(doc.documentElement, options)
 
     # convert colors to #RRGGBB format
     if options.simple_colors:
-        stats.num_bytes_saved_in_colors = convertColors(doc.documentElement)
+        _num_bytes_saved_in_colors = convertColors(doc.documentElement)
 
     # remove unreferenced gradients/patterns outside of defs
     # and most unreferenced elements inside of defs
-    while remove_unreferenced_elements(doc, options.keep_defs, stats) > 0:
+    while removeUnreferencedElements(doc, options.keep_defs) > 0:
         pass
 
     # remove empty defs, metadata, g
@@ -3746,30 +3787,29 @@ def scourString(in_string, options=None, stats=None):
                     removeElem = True
             if removeElem:
                 elem.parentNode.removeChild(elem)
-                stats.num_elements_removed += 1
+                _num_elements_removed += 1
 
     if options.strip_ids:
         referencedIDs = findReferencedElements(doc.documentElement)
         identifiedElements = unprotected_ids(doc, options)
-        stats.num_ids_removed += remove_unreferenced_ids(referencedIDs,
-                                                         identifiedElements)
+        removeUnreferencedIDs(referencedIDs, identifiedElements)
 
-    while remove_duplicate_gradient_stops(doc, stats) > 0:
+    while removeDuplicateGradientStops(doc) > 0:
         pass
 
     # remove gradients that are only referenced by one other gradient
-    while collapse_singly_referenced_gradients(doc, stats) > 0:
+    while collapseSinglyReferencedGradients(doc) > 0:
         pass
 
     # remove duplicate gradients
-    stats.num_elements_removed += removeDuplicateGradients(doc)
+    _num_elements_removed += removeDuplicateGradients(doc)
 
     if options.group_collapse:
-        stats.num_elements_removed += mergeSiblingGroupsWithCommonAttributes(doc.documentElement)
+        _num_elements_removed += mergeSiblingGroupsWithCommonAttributes(doc.documentElement)
     # create <g> elements if there are runs of elements with the same attributes.
     # this MUST be before moveCommonAttributesToParentGroup.
     if options.group_create:
-        create_groups_for_common_attributes(doc.documentElement, stats)
+        createGroupsForCommonAttributes(doc.documentElement)
 
     # move common attributes to parent group
     # NOTE: the if the <svg> element's immediate children
@@ -3778,22 +3818,22 @@ def scourString(in_string, options=None, stats=None):
     # doesn't accept fill=, stroke= etc.!
     referencedIds = findReferencedElements(doc.documentElement)
     for child in doc.documentElement.childNodes:
-        stats.num_attributes_removed += moveCommonAttributesToParentGroup(child, referencedIds)
+        _num_attributes_removed += moveCommonAttributesToParentGroup(child, referencedIds)
 
     # remove unused attributes from parent
-    stats.num_attributes_removed += removeUnusedAttributesOnParent(doc.documentElement)
+    _num_attributes_removed += removeUnusedAttributesOnParent(doc.documentElement)
 
     # Collapse groups LAST, because we've created groups. If done before
     # moveAttributesToParentGroup, empty <g>'s may remain.
     if options.group_collapse:
-        while remove_nested_groups(doc.documentElement, stats) > 0:
+        while removeNestedGroups(doc.documentElement) > 0:
             pass
 
-    # remove unnecessary closing point of polygons and scour points
+    # remove unnecessary closing point of polygons and svg4web points
     for polygon in doc.documentElement.getElementsByTagName('polygon'):
-        stats.num_points_removed_from_polygon += clean_polygon(polygon, options)
+        cleanPolygon(polygon, options)
 
-    # scour points of polyline
+    # svg4web points of polyline
     for polyline in doc.documentElement.getElementsByTagName('polyline'):
         cleanPolyline(polyline, options)
 
@@ -3802,39 +3842,39 @@ def scourString(in_string, options=None, stats=None):
         if elem.getAttribute('d') == '':
             elem.parentNode.removeChild(elem)
         else:
-            clean_path(elem, options, stats)
+            cleanPath(elem, options)
 
     # shorten ID names as much as possible
     if options.shorten_ids:
-        stats.num_bytes_saved_in_ids += shortenIDs(doc, options.shorten_ids_prefix, options)
+        _num_bytes_saved_in_ids += shortenIDs(doc, options.shorten_ids_prefix, options)
 
-    # scour lengths (including coordinates)
+    # svg4web lengths (including coordinates)
     for type in ['svg', 'image', 'rect', 'circle', 'ellipse', 'line',
                  'linearGradient', 'radialGradient', 'stop', 'filter']:
         for elem in doc.getElementsByTagName(type):
             for attr in ['x', 'y', 'width', 'height', 'cx', 'cy', 'r', 'rx', 'ry',
                          'x1', 'y1', 'x2', 'y2', 'fx', 'fy', 'offset']:
                 if elem.getAttribute(attr) != '':
-                    elem.setAttribute(attr, scourLength(elem.getAttribute(attr)))
+                    elem.setAttribute(attr, svg4webLength(elem.getAttribute(attr)))
     viewBox = doc.documentElement.getAttribute('viewBox')
     if viewBox:
         lengths = RE_COMMA_WSP.split(viewBox)
-        lengths = [scourUnitlessLength(length) for length in lengths]
+        lengths = [svg4webUnitlessLength(length) for length in lengths]
         doc.documentElement.setAttribute('viewBox', ' '.join(lengths))
 
-    # more length scouring in this function
-    stats.num_bytes_saved_in_lengths = reducePrecision(doc.documentElement)
+    # more length svg4webing in this function
+    _num_bytes_saved_in_lengths = reducePrecision(doc.documentElement)
 
     # remove default values of attributes
-    stats.num_attributes_removed += removeDefaultAttributeValues(doc.documentElement, options)
+    _num_attributes_removed += removeDefaultAttributeValues(doc.documentElement, options)
 
     # reduce the length of transformation attributes
-    stats.num_bytes_saved_in_transforms = optimizeTransforms(doc.documentElement, options)
+    _num_bytes_saved_in_transforms = optimizeTransforms(doc.documentElement, options)
 
     # convert rasters references to base64-encoded strings
     if options.embed_rasters:
         for elem in doc.documentElement.getElementsByTagName('image'):
-            stats.num_rasters_embedded += embed_rasters(elem, options)
+            embedRasters(elem, options)
 
     # properly size the SVG document (ideally width/height should be 100% with a viewBox)
     if options.enable_viewboxing:
@@ -3868,16 +3908,16 @@ def scourString(in_string, options=None, stats=None):
 # used mostly by unit tests
 # input is a filename
 # returns the minidom doc representation of the SVG
-def scourXmlFile(filename, options=None, stats=None):
+def svg4webXmlFile(filename, options=None):
     # sanitize options (take missing attributes from defaults, discard unknown attributes)
     options = sanitizeOptions(options)
     # we need to make sure infilename is set correctly (otherwise relative references in the SVG won't work)
     options.ensure_value("infilename", filename)
 
-    # open the file and scour it
+    # open the file and svg4web it
     with open(filename, "rb") as f:
         in_string = f.read()
-    out_string = scourString(in_string, options, stats=stats)
+    out_string = svg4webString(in_string, options)
 
     # prepare the output xml.dom.minidom object
     doc = xml.dom.minidom.parseString(out_string.encode('utf-8'))
@@ -4121,22 +4161,22 @@ def getInOut(options):
     return [infile, outfile]
 
 
-def generate_report(stats):
+def getReport():
     return (
-        '  Number of elements removed: ' + str(stats.num_elements_removed) + os.linesep +
-        '  Number of attributes removed: ' + str(stats.num_attributes_removed) + os.linesep +
-        '  Number of unreferenced IDs removed: ' + str(stats.num_ids_removed) + os.linesep +
-        '  Number of comments removed: ' + str(stats.num_comments_removed) + os.linesep +
-        '  Number of style properties fixed: ' + str(stats.num_style_properties_fixed) + os.linesep +
-        '  Number of raster images embedded: ' + str(stats.num_rasters_embedded) + os.linesep +
-        '  Number of path segments reduced/removed: ' + str(stats.num_path_segments_removed) + os.linesep +
-        '  Number of points removed from polygons: ' + str(stats.num_points_removed_from_polygon) + os.linesep +
-        '  Number of bytes saved in path data: ' + str(stats.num_bytes_saved_in_path_data) + os.linesep +
-        '  Number of bytes saved in colors: ' + str(stats.num_bytes_saved_in_colors) + os.linesep +
-        '  Number of bytes saved in comments: ' + str(stats.num_bytes_saved_in_comments) + os.linesep +
-        '  Number of bytes saved in IDs: ' + str(stats.num_bytes_saved_in_ids) + os.linesep +
-        '  Number of bytes saved in lengths: ' + str(stats.num_bytes_saved_in_lengths) + os.linesep +
-        '  Number of bytes saved in transformations: ' + str(stats.num_bytes_saved_in_transforms)
+        '  Number of elements removed: ' + str(_num_elements_removed) + os.linesep +
+        '  Number of attributes removed: ' + str(_num_attributes_removed) + os.linesep +
+        '  Number of unreferenced IDs removed: ' + str(_num_ids_removed) + os.linesep +
+        '  Number of comments removed: ' + str(_num_comments_removed) + os.linesep +
+        '  Number of style properties fixed: ' + str(_num_style_properties_fixed) + os.linesep +
+        '  Number of raster images embedded: ' + str(_num_rasters_embedded) + os.linesep +
+        '  Number of path segments reduced/removed: ' + str(_num_path_segments_removed) + os.linesep +
+        '  Number of points removed from polygons: ' + str(_num_points_removed_from_polygon) + os.linesep +
+        '  Number of bytes saved in path data: ' + str(_num_bytes_saved_in_path_data) + os.linesep +
+        '  Number of bytes saved in colors: ' + str(_num_bytes_saved_in_colors) + os.linesep +
+        '  Number of bytes saved in comments: ' + str(_num_bytes_saved_in_comments) + os.linesep +
+        '  Number of bytes saved in IDs: ' + str(_num_bytes_saved_in_ids) + os.linesep +
+        '  Number of bytes saved in lengths: ' + str(_num_bytes_saved_in_lengths) + os.linesep +
+        '  Number of bytes saved in transformations: ' + str(_num_bytes_saved_in_transforms)
     )
 
 
@@ -4145,11 +4185,10 @@ def start(options, input, output):
     options = sanitizeOptions(options)
 
     start = time.time()
-    stats = ScourStats()
 
     # do the work
     in_string = input.read()
-    out_string = scourString(in_string, options, stats=stats).encode("UTF-8")
+    out_string = svg4webString(in_string, options).encode("UTF-8")
     output.write(out_string)
 
     # Close input and output files (but do not attempt to close stdin/stdout!)
@@ -4175,7 +4214,7 @@ def start(options, input, output):
             oldsize,
             sizediff), file=options.ensure_value("stdout", sys.stdout))
         if options.verbose:
-            print(generate_report(stats), file=options.ensure_value("stdout", sys.stdout))
+            print(getReport(), file=options.ensure_value("stdout", sys.stdout))
 
 
 def run():

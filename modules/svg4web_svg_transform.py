@@ -5,7 +5,7 @@
 #
 #  Copyright 2010 Louis Simard
 #
-#  This file is part of Scour, http://www.codedread.com/scour/
+#  This file is part of Scour, http://www.codedread.com/svg4web/
 #
 #   Licensed under the Apache License, Version 2.0 (the "License");
 #   you may not use this file except in compliance with the License.

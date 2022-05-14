@@ -5,7 +5,7 @@
 #
 #  Copyright 2009 Jeff Schiller
 #
-#  This file is part of Scour, http://www.codedread.com/scour/
+#  This file is part of Scour, http://www.codedread.com/svg4web/
 #
 #   Licensed under the Apache License, Version 2.0 (the "License");
 #   you may not use this file except in compliance with the License.
@@ -19,13 +19,13 @@
 #   See the License for the specific language governing permissions and
 #   limitations under the License.
 
-# In order to resolve Bug 368716 (https://bugs.launchpad.net/scour/+bug/368716)
-# scour needed a bare-minimum CSS parser in order to determine if some elements
+# In order to resolve Bug 368716 (https://bugs.launchpad.net/svg4web/+bug/368716)
+# svg4web needed a bare-minimum CSS parser in order to determine if some elements
 # were still referenced by CSS properties.
 
 # I looked at css-py (a CSS parser built in Python), but that library
 # is about 35k of Python and requires ply to be installed.  I just need
-# something very basic to suit scour's needs.
+# something very basic to suit svg4web's needs.
 
 # yocto-css takes a string of CSS and tries to spit out a list of rules
 # A rule is an associative array (dictionary) with the following keys:
